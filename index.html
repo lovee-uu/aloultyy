@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>For aloulty ❤️</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #060208; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { width: min(100vw, 100vh); height: min(100vw, 100vh); display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  // ---- settings (same as the Python version) ----
+  const SC = 21, OY = 20, DURATION = 10, TICK = 16, ANIM = 42, LIFT = 34, GAP = 7;
+  const SIZES = [9, 10, 11, 12];
+  const FONT = "Arial, 'Noto Sans', 'Segoe UI', sans-serif";
+  const BG = "#060208";
+  const PT = 96 / 72; // tk points -> css pixels
+
+  const PHRASES = [
+    "I love you", "Seni seviyorum", "Te amo", "Je t'aime",
+    "Ich liebe dich", "Ti amo", "Eu te amo", "Я тебя люблю",
+    "사랑해", "愛してる", "我爱你", "मैं तुमसे प्यार करता हूँ",
+    "Σ' αγαπώ", "Ik hou van jou", "Jag älskar dig", "Kocham cię",
+    "ฉันรักเธอ", "Anh yêu em", "Aku cinta kamu", "Я тебе кохаю",
+  ];
+
+  // ---- canvas ----
+  const cv = document.getElementById("c");
+  const ctx = cv.getContext("2d");
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  cv.width = 800 * dpr;
+  cv.height = 800 * dpr;
+
+  // ---- seeded RNG (mulberry32) ----
+  function mulberry32(a) {
+    return () => {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rand = mulberry32(11);
+  const uniform = (a, b) => a + (b - a) * rand();
+  const choice = (arr) => arr[Math.floor(rand() * arr.length)];
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+  }
+
+  // ---- fonts / measuring ----
+  const fontStr = (pt) => `bold ${pt * PT}px ${FONT}`;
+  function measure(text, pt) {
+    ctx.font = fontStr(pt);
+    return ctx.measureText(text).width;
+  }
+
+  // ---- color helpers (colors are [r,g,b] in 0..1) ----
+  const clamp = (v) => Math.max(0, Math.min(1, v));
+  const hx = (c) => "#" + c.map(v => Math.floor(clamp(v) * 255).toString(16).padStart(2, "0")).join("");
+  const mix = (a, b, k) => a.map((p, i) => p + (b[i] - p) * k);
+  const dim = (c, k) => c.map(v => v * k);
+  const BGC = [1, 3, 5].map(i => parseInt(BG.slice(i, i + 2), 16) / 255);
+  const FLASH = [1.0, 0.78, 0.78];
+
+  // ---- heart geometry ----
+  function heart(a) {
+    const x = 16 * Math.pow(Math.sin(a), 3);
+    const y = 13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a);
+    return [x * SC, y * SC + OY];
+  }
+  const POLY = [];
+  for (let i = 0; i < 720; i++) POLY.push(heart(2 * Math.PI * i / 720));
+  const EDGES = POLY.map((p, i) => [p, POLY[(i + 1) % POLY.length]]);
+  const YMAX = Math.max(...POLY.map(p => p[1]));
+  const YMIN = Math.min(...POLY.map(p => p[1]));
+  const CY = (YMAX + YMIN) / 2;
+
+  function spans(y) {
+    const xs = [];
+    for (const [[x1, y1], [x2, y2]] of EDGES) {
+      if ((y1 <= y && y < y2) || (y2 <= y && y < y1)) {
+        xs.push(x1 + (y - y1) * (x2 - x1) / (y2 - y1));
+      }
+    }
+    xs.sort((a, b) => a - b);
+    const out = [];
+    for (let i = 0; i + 1 < xs.length; i += 2) out.push([xs[i], xs[i + 1]]);
+    return out;
+  }
+  function intersect(A, B) {
+    const out = [];
+    for (const a of A) for (const b of B) {
+      const lo = Math.max(a[0], b[0]), hi = Math.min(a[1], b[1]);
+      if (hi - lo > 14) out.push([lo, hi]);
+    }
+    return out;
+  }
+  const mathDist = (x, y) => Math.hypot(x / (16 * SC), (y - CY) / (14.5 * SC));
+
+  // ---- phrase cycle ----
+  let order = [], oi = 0;
+  function nextPhrase() {
+    if (oi >= order.length) { order = PHRASES.slice(); shuffle(order); oi = 0; }
+    return order[oi++];
+  }
+
+  // ---- build layout ----
+  function build() {
+    const rowH = Math.max(...SIZES.map(z => z * PT * 1.15)) + 4;
+    const half = rowH / 2;
+    let placed = [];
+
+    for (let y = YMAX - half; y > YMIN + half; y -= rowH) {
+      const row = intersect(spans(y + half), spans(y - half));
+      for (let [lo, hi] of row) {
+        lo += 4; hi -= 4;
+        let cur = lo + uniform(0, 8);
+        const line = [];
+        while (true) {
+          let fit = null;
+          for (let k = 0; k < 10; k++) {
+            const text = nextPhrase();
+            const size = choice(SIZES);
+            const w = measure(text, size);
+            if (cur + w <= hi) { fit = { text, size, w }; break; }
+          }
+          if (!fit) break;
+          line.push([cur + fit.w / 2, fit.text, fit.size, fit.w]);
+          cur += fit.w + GAP;
+        }
+        if (!line.length) continue;
+
+        if (line.length > 1) {
+          const last = line[line.length - 1];
+          const left = hi - (last[0] + last[3] / 2);
+          line.forEach((it, i) => { it[0] += left * i / (line.length - 1); });
+        } else {
+          line[0][0] = (lo + hi) / 2;
+        }
+        line.forEach(([x, text, size], i) => {
+          placed.push({ x, y, text, size, edge: i === 0 || i === line.length - 1 });
+        });
+      }
+    }
+
+    placed = placed.filter(p => !(Math.abs(p.x) < 220 && Math.abs(p.y - CY) < 42));
+
+    const wine = [0.58, 0.0, 0.09], crimson = [0.90, 0.05, 0.14], blood = [0.98, 0.10, 0.16];
+    for (const p of placed) {
+      const rad = Math.min(1, mathDist(p.x, p.y));
+      let base = mix(wine, crimson, 0.25 + 0.75 * rad);
+      base = mix(base, blood, uniform(0, 0.35) + (p.edge ? 0.3 : 0));
+      p.color = base.map(v => Math.min(1, v));
+      p.rad = rad;
+    }
+
+    const edges = placed.filter(p => p.edge);
+    const inner = placed.filter(p => !p.edge);
+    const TAU = 2 * Math.PI;
+    edges.sort((a, b) =>
+      (((Math.atan2(a.x, a.y - CY) % TAU) + TAU) % TAU) -
+      (((Math.atan2(b.x, b.y - CY) % TAU) + TAU) % TAU));
+    inner.forEach(p => { p.key = -p.rad + uniform(0, 0.08); });
+    inner.sort((a, b) => a.key - b.key);
+    return edges.concat(inner);
+  }
+
+  // ---- state ----
+  const ORDER = build();
+  const RATE = ORDER.length / (DURATION * 1000 / TICK);
+  let nextIdx = 0, acc = 0, spawning = true;
+  const spawned = []; // items in spawn order (drawn in this order)
+  const NAME_Y = -CY;
+  let glowColor = "#ff174f";
+  const flashes = new Map(); // item -> expiry time (ms)
+  let shimmerAt = 0;
+
+  function itemState(p) {
+    const u = clamp(p.f / ANIM);
+    const e = 1 - Math.pow(1 - u, 3);
+    const c = p.color;
+    const x = p.x, y = -p.y;
+    const px = x + p.dx * (1 - e);
+    const py = y - (1 - e) * LIFT;
+    const flashK = 0.75 * Math.sin(Math.PI * clamp((u - 0.55) / 0.45));
+    return {
+      done: u >= 1, x, y, px, py,
+      shadow: hx(mix(BGC, dim(c, 0.30), e)),
+      halo: hx(mix(BGC, dim(c, 0.20), e * e)),
+      main: hx(mix(mix(BGC, c, Math.pow(e, 1.5)), FLASH, flashK)),
+    };
+  }
+
+  function step() {
+    if (spawning) {
+      acc += RATE;
+      while (acc >= 1) {
+        acc -= 1;
+        if (nextIdx >= ORDER.length) { spawning = false; break; }
+        const p = ORDER[nextIdx++];
+        p.f = 0; p.dx = uniform(-10, 10);
+        spawned.push(p);
+      }
+    }
+    for (const p of spawned) if (p.f < ANIM) p.f++;
+  }
+
+  function allDone() {
+    return !spawning && spawned.every(p => p.f >= ANIM);
+  }
+
+  function shimmer(now) {
+    if (now < shimmerAt) return;
+    shimmerAt = now + 140;
+    glowColor = choice(["#ff174f", "#ff477e", "#ff80ab"]);
+    const p = choice(spawned);
+    flashes.set(p, now + 260);
+  }
+
+  // ---- drawing ----
+  function text(t, x, y, pt, fill) {
+    ctx.font = fontStr(pt);
+    ctx.fillStyle = fill;
+    ctx.fillText(t, x, y);
+  }
+
+  function render(now) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, 800, 800);
+    ctx.translate(400, 400);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    for (const p of spawned) {
+      const s = itemState(p);
+      const finalState = s.done;
+      const hx_ = finalState ? p.x : s.px;
+      const hy_ = finalState ? s.y : s.py;
+      text(p.text, s.x + 2, s.y + 3, p.size, s.shadow);
+      text(p.text, hx_, hy_, p.size + 1, s.halo);
+      let col = finalState ? hx(p.color) : s.main;
+      if (finalState && flashes.has(p)) {
+        if (now < flashes.get(p)) col = hx(mix(p.color, FLASH, 0.6));
+        else flashes.delete(p);
+      }
+      text(p.text, hx_, hy_, p.size, col);
+    }
+
+    // name + hearts, always on top
+    text("aloulty", 2, NAME_Y + 3, 48, "#65001e");
+    text("aloulty", 0, NAME_Y, 46, glowColor);
+    text("aloulty", 0, NAME_Y - 2, 44, "#fff0f5");
+    text("♥", -205, NAME_Y, 20, "#ff477e");
+    text("♥", 205, NAME_Y, 20, "#ff477e");
+  }
+
+  // ---- main loop (fixed 16ms timestep) ----
+  let last = null, carry = 0, started = false;
+  const START_DELAY = 200;
+  const t0 = performance.now();
+
+  function frame(now) {
+    if (!started && now - t0 >= START_DELAY) { started = true; last = now; }
+    if (started) {
+      carry += Math.min(now - last, 250);
+      last = now;
+      while (carry >= TICK) {
+        carry -= TICK;
+        if (!allDone()) step();
+      }
+      if (allDone()) shimmer(now);
+    }
+    render(now);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
